@@ -1,0 +1,164 @@
+-- ping_pong_game.vhdl
+library IEEE;
+use IEEE.STD_LOGIC_1164.ALL;
+use IEEE.STD_LOGIC_ARITH.ALL;
+use IEEE.STD_LOGIC_UNSIGNED.ALL;
+
+entity ping_pong is
+    Port (
+        clk     : in  std_logic;
+        btnL    : in  std_logic;
+        btnR    : in  std_logic;
+        leds    : out std_logic_vector(15 downto 0);
+        seg     : out std_logic_vector(6 downto 0);
+        an      : out std_logic_vector(3 downto 0)
+    );
+end ping_pong;
+
+architecture Behavioral of ping_pong is
+
+    signal clk_div      : std_logic := '0';
+    signal counter      : integer range 0 to 4999999 := 0; -- faster clock divider (from 50M to 5M)
+    signal led_index    : integer range 0 to 15 := 15;
+    signal direction    : std_logic := '0'; -- '0' for left to right, '1' for right to left
+    signal playing      : boolean := false;
+    signal leds_reg     : std_logic_vector(15 downto 0);
+
+    type state_type is (IDLE, RUNNING_LEFT, RUNNING_RIGHT, SCORED, MISSED);
+    signal state        : state_type := IDLE;
+    signal score_p1     : integer range 0 to 99 := 0;
+    signal score_p2     : integer range 0 to 99 := 0;
+
+    -- 7-segment signals
+    signal seg_data     : std_logic_vector(3 downto 0);
+    signal digit_clk    : integer range 0 to 19999 := 0;
+    signal digit_idx    : integer range 0 to 3 := 0;
+
+begin
+
+    -- Faster Clock Divider (to ~5Hz)
+    process(clk)
+    begin
+        if rising_edge(clk) then
+            if counter = 4999999 then
+                clk_div <= not clk_div;
+                counter <= 0;
+            else
+                counter <= counter + 1;
+            end if;
+        end if;
+    end process;
+
+    -- Main FSM
+    process(clk_div)
+    begin
+        if rising_edge(clk_div) then
+            case state is
+                when IDLE =>
+                    leds_reg <= (others => '0');
+                    leds_reg(15) <= '1';
+                    led_index <= 15;
+                    if btnL = '1' then
+                        state <= RUNNING_LEFT;
+                        direction <= '0';
+                        playing <= true;
+                    end if;
+
+                when RUNNING_LEFT =>
+                    leds_reg <= (others => '0');
+                    if led_index > 0 then
+                        led_index <= led_index - 1;
+                    else
+                        led_index <= 0;
+                    end if;
+                    leds_reg(led_index) <= '1';
+                    if btnR = '1' then
+                        if led_index = 0 then
+                            score_p2 <= score_p2 + 1;
+                            state <= RUNNING_RIGHT;
+                            direction <= '1';
+                        else
+                            state <= MISSED;
+                        end if;
+                    end if;
+
+                when RUNNING_RIGHT =>
+                    leds_reg <= (others => '0');
+                    if led_index < 15 then
+                        led_index <= led_index + 1;
+                    else
+                        led_index <= 15;
+                    end if;
+                    leds_reg(led_index) <= '1';
+                    if btnL = '1' then
+                        if led_index = 15 then
+                            score_p1 <= score_p1 + 1;
+                            state <= RUNNING_LEFT;
+                            direction <= '0';
+                        else
+                            state <= MISSED;
+                        end if;
+                    end if;
+
+                when MISSED =>
+                    leds_reg <= (others => '1');
+                    led_index <= 15;
+                    state <= IDLE;
+
+                when SCORED =>
+                    null;
+            end case;
+        end if;
+    end process;
+
+    -- LED output
+    leds <= leds_reg;
+
+    -- 7-segment score display
+    process(clk)
+        function to_bcd_digit(num : integer) return std_logic_vector is
+        begin
+            case num is
+                when 0 => return "1000000";
+                when 1 => return "1111001";
+                when 2 => return "0100100";
+                when 3 => return "0110000";
+                when 4 => return "0011001";
+                when 5 => return "0010010";
+                when 6 => return "0000010";
+                when 7 => return "1111000";
+                when 8 => return "0000000";
+                when 9 => return "0010000";
+                when others => return "1111111";
+            end case;
+        end function;
+    begin
+        if rising_edge(clk) then
+            if digit_clk = 19999 then
+                digit_clk <= 0;
+                digit_idx <= (digit_idx + 1) mod 4;
+            else
+                digit_clk <= digit_clk + 1;
+            end if;
+        end if;
+
+        case digit_idx is
+            when 0 =>  -- Right-most digit: Player 2 units
+                an <= "1110";
+                seg <= to_bcd_digit(score_p2 mod 10);
+            when 1 =>  -- Player 2 tens
+                an <= "1101";
+                seg <= to_bcd_digit(score_p2 / 10);
+            when 2 =>  -- Player 1 units
+                an <= "1011";
+                seg <= to_bcd_digit(score_p1 mod 10);
+            when 3 =>  -- Player 1 tens
+                an <= "0111";
+                seg <= to_bcd_digit(score_p1 / 10);
+            when others =>
+                an <= "1111";
+                seg <= "1111111";
+        end case;
+    end process;
+
+end Behavioral;
